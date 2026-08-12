@@ -1,0 +1,47 @@
+name: Compression and cache header smoke test
+
+on:
+  pull_request:
+    paths:
+      - 'perf/**'
+      - '.github/workflows/**'
+
+jobs:
+  compression-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install server deps
+        run: |
+          cd perf/express-server
+          npm ci
+      - name: Start sample server
+        run: |
+          cd perf/express-server
+          nohup npm start > server.log 2>&1 &
+          # wait for server to start
+          for i in {1..10}; do
+            if curl -sS --head "http://127.0.0.1:3000/" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+      - name: Verify compression on dynamic route
+        run: |
+          sleep 1
+          if curl -sS -H "Accept-Encoding: gzip" -I http://127.0.0.1:3000/api/hello | grep -i "Content-Encoding"; then
+            echo "Compression header present for dynamic route"
+          else
+            echo "Compression header missing for dynamic route"; exit 1
+          fi
+      - name: Verify cache headers on static route
+        run: |
+          if curl -sS -I http://127.0.0.1:3000/static/sample.txt | grep -i "Cache-Control"; then
+            echo "Cache-Control header present for static assets"
+          else
+            echo "Cache-Control header missing for static assets"; exit 1
+          fi
