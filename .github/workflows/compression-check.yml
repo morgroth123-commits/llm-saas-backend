@@ -18,7 +18,7 @@ jobs:
       - name: Install server deps
         run: |
           cd perf/express-server
-          npm ci
+          npm install
       - name: Start sample server
         run: |
           cd perf/express-server
