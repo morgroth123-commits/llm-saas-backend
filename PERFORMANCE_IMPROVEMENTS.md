@@ -17,7 +17,7 @@ This document lists 10 high-impact performance improvement opportunities for the
 
 Selected highest-impact, lowest-effort: Enable HTTP response compression + caching headers
 
-Why: Compression reduces payload sizes dramatically (often 60–90% for text), and proper caching eliminates repeat fetches. Both are low-effort changes in most web frameworks and reverse proxies, but yield immediate latency and cost savings.
+Why: Compression reduces payload sizes dramatically (often 60–90% for text), and proper caching eliminates repeat fetches. Both are low-effort changes in most web frameworks and reverse proxies, but yield immediate latency and cost savings. Take care to scope compression: avoid compressing responses that contain secrets, authentication tokens, or per-user sensitive data to mitigate BREACH-style attacks.
 
 Implementation notes (apply in app or reverse proxy):
 
@@ -27,20 +27,44 @@ Implementation notes (apply in app or reverse proxy):
 const compression = require('compression');
 app.use(compression());
 // set caching headers for static assets
+// NOTE: use long maxAge only for content-fingerprinted filenames; use a shorter TTL for mutable paths
 app.use('/static', express.static(path.join(__dirname,'public'), { maxAge: '30d' }));
 ```
 
 - Nginx (reverse proxy):
 
-```
-gzip on;
-gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m inactive=60m max_size=1g;
+```nginx
+http {
+    gzip on;
+    gzip_vary on;  # ensure caches vary by Accept-Encoding
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # Example proxy cache (storage + keys_zone); apply `proxy_cache my_cache;` in a location to enable
+    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m inactive=60m max_size=1g;
+}
+
+# In a server/location block:
+# location /api/ {
+#     proxy_cache my_cache;
+#     proxy_cache_valid 200 302 10m;
+#     proxy_cache_valid 404 1m;
+# }
 ```
 
 Verification:
-- Use `curl -I -H "Accept-Encoding: gzip, br" https://your.site/` to confirm Content-Encoding and cache headers.
-- Measure before/after with a simple `curl --compressed` payload size check or Lighthouse.
+- Test separately for gzip, brotli, and identity encodings so the response encoding is observable (do not use `--compressed` when asserting headers). Example checks:
+
+```bash
+# gzip
+curl -sS -H "Accept-Encoding: gzip" -D - https://your.site/api/hello -o /dev/null | grep -i "Content-Encoding\|Vary\|Cache-Control"
+# brotli
+curl -sS -H "Accept-Encoding: br" -D - https://your.site/api/hello -o /dev/null | grep -i "Content-Encoding\|Vary\|Cache-Control"
+# identity (no compression)
+curl -sS -H "Accept-Encoding: identity" -D - https://your.site/api/hello -o /dev/null | grep -i "Content-Encoding\|Vary\|Cache-Control"
+```
+
+- For static assets, assert long-lived Cache-Control only applies to fingerprinted assets and that `Vary: Accept-Encoding` is present when responses are compressed.
+- Measure before/after bandwidth and latency with `curl --compressed -w "%{size_download} bytes\n"` or Lighthouse for broader metrics.
 
 Next steps to implement in codebase:
 1. Add compression middleware or reverse-proxy config.
