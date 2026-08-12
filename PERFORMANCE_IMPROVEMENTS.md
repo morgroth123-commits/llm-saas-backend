@@ -17,39 +17,66 @@ This document lists 10 high-impact performance improvement opportunities for the
 
 Selected highest-impact, lowest-effort: Enable HTTP response compression + caching headers
 
-Why: Compression reduces payload sizes dramatically (often 60–90% for text), and proper caching eliminates repeat fetches. Both are low-effort changes in most web frameworks and reverse proxies, but yield immediate latency and cost savings. Take care to scope compression: avoid compressing responses that contain secrets, authentication tokens, or per-user sensitive data to mitigate BREACH-style attacks.
+Why: Compression reduces payload sizes dramatically (often 60–90% for text), and proper caching eliminates repeat fetches. Both are low-effort changes in most web frameworks and reverse proxies, but yield immediate latency and cost savings. Take care to scope compression: don't compress responses that contain secrets, authentication tokens, or per-user sensitive data — this helps mitigate BREACH-style attacks.
 
-Implementation notes (apply in app or reverse proxy):
+BREACH mitigation examples (minimal):
+
+- Nginx (reverse proxy):
+
+```nginx
+# disable gzip for a sensitive path
+location /sensitive {
+    gzip off;
+}
+```
 
 - Node/Express (npm):
 
 ```js
 const compression = require('compression');
-app.use(compression());
+// filter out responses that contain secrets (set a header when secret content is present)
+app.use(compression({
+  filter: (req, res) => {
+    if (res.getHeader('X-Contains-Secret')) return false;
+    return compression.filter(req, res);
+  }
+}));
 // set caching headers for static assets
-// NOTE: use long maxAge only for content-fingerprinted filenames; use a shorter TTL for mutable paths
-app.use('/static', express.static(path.join(__dirname,'public'), { maxAge: '30d' }));
+// NOTE: use long maxAge + immutable only for content-fingerprinted filenames; use a shorter TTL for mutable paths
+app.use('/static', express.static(path.join(__dirname,'public'), { maxAge: '30d', immutable: true }));
 ```
 
 - Nginx (reverse proxy):
 
 ```nginx
 http {
+    # gzip-only example: enable gzip compression and ensure caches vary per encoding
     gzip on;
-    gzip_vary on;  # ensure caches vary by Accept-Encoding
+    gzip_vary on;  # ensures responses include "Vary: Accept-Encoding" so caches store separate entries per encoding and avoid cache poisoning
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
-    # Example proxy cache (storage + keys_zone); apply `proxy_cache my_cache;` in a location to enable
+    # Example proxy cache (storage + keys_zone).
+    # NOTE: proxy_cache_path must be declared in the top-level http { } context (not inside server/location).
+    # proxy_cache is off by default; enable it where needed with `proxy_cache my_cache;` inside a server or location block.
     proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m inactive=60m max_size=1g;
 }
 
-# In a server/location block:
+# In a server/location block (enable the cache where appropriate):
 # location /api/ {
 #     proxy_cache my_cache;
 #     proxy_cache_valid 200 302 10m;
 #     proxy_cache_valid 404 1m;
 # }
 ```
+
+```nginx
+# Optional: Brotli configuration (requires ngx_brotli module or Nginx built with brotli):
+# Place these directives in http { } or the main server context as appropriate.
+brotli on;
+brotli_comp_level 6;
+brotli_types text/css application/javascript application/json text/html;
+```
+
 
 Verification:
 - Test separately for gzip, brotli, and identity encodings so the response encoding is observable (do not use `--compressed` when asserting headers). Example checks:
