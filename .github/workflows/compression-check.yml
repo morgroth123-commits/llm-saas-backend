@@ -6,6 +6,9 @@ on:
       - 'perf/**'
       - '.github/workflows/**'
 
+permissions:
+  contents: read
+
 jobs:
   compression-check:
     runs-on: ubuntu-latest
